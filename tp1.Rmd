@@ -1,0 +1,136 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+library(mongolite)
+# library(jsonlite)
+library(ggplot2)
+
+sources = mongo(collection = "tweets_mongo_covid19", db = "DMUBA" )
+
+```
+
+
+Contar cantidad de Hashtags, estandarizando el texto
+```{r}
+pipeline <- 
+#---- JSON ----------
+('[
+    {"$unwind" : "$hashtags"}, 
+    {"$group" : 
+        {   "_id" : "$hashtags",
+            "cantidad" : {"$sum" : 1}
+        }
+    },
+    {"$sort" : {"cantidad": -1 }},
+    {"$match" : { "_id" : {"$not" : {"$eq" : null } }}},
+    {"$project": {"hashtag": "$_id", "cantidad": 1}},
+    {"$project": {"_id":0}}
+]')
+#----  
+
+data <- sources$aggregate(pipeline = pipeline)
+
+# eliminar acentos, mayusculas, guiones, etc
+data$hashtag_orig <- data$hashtag
+data$hashtag <- tolower(iconv(data$hashtag_orig, from= "UTF-8" , to = "ASCII//TRANSLIT"  ))
+data$hashtag = gsub(data$hashtag , pattern = "[?_-]",replacement = "",)
+
+#volver a agrupar y ordenar
+data2 <- aggregate(cantidad ~ hashtag, data, sum)
+data2 <- data2[order(data2$cantidad,decreasing = TRUE), ]
+
+barplot(data$cantidad, names.arg = data$`_id`, horiz = 1 )
+```
+
+
+Evolución temporal de los principales hashtags incluyendo retweets
+```{r}
+
+pipeline <- 
+#---- JSON ----
+('[
+    {"$unwind" : "$hashtags"}
+,   {"$addFields" : 
+        { "fecha" : 
+            { "$dateToString" : 
+                {   "date" : "$created_at", 
+                    "format" : "%Y-%m-%d"   
+                }
+            } 
+        } 
+    }
+,   {"$sort": {"cantidad": -1 }}
+,   {"$project" : {"tweet_status_id":1, "fecha": 1,"hashtag": "$hashtags"}}
+]')
+#----
+
+
+data = sources$aggregate(pipeline = pipeline)
+
+# eliminar acentos, mayusculas, guiones, etc
+data$hashtag_orig <- data$hashtag
+data$hashtag <- tolower(iconv(data$hashtag_orig, from= "UTF-8" , to = "ASCII//TRANSLIT"  ))
+data$hashtag = gsub(data$hashtag , pattern = "[?_-]",replacement = "",)
+
+#traer los 10 prinicpales hashtags
+data$count <- 1
+data_totales = aggregate(count ~ hashtag, data, sum)
+data_totales_top = data_totales[order(data_totales$count,decreasing = TRUE)[1:5],]
+
+data_top = data[data$hashtag %in% data_totales_top$hashtag,]
+  
+#rotar la tabla
+#data.t <- reshape(data,  timevar = "hashtag", idvar ="fecha", direction = "wide")
+#data.t <- data.t[order(data.t$fecha),]
+
+( ggplot(data_top)
++ aes(x=fecha, fill=hashtag) 
++ geom_bar(position = position_dodge())
++ theme(axis.text.x = element_text(angle = 90, hjust = 1))
+)
+
+( ggplot(data_top)
++ aes(x=fecha, fill=hashtag) 
++ geom_bar(position = position_fill())
++ theme(axis.text.x = element_text(angle = 90, hjust = 1))
+)
+
+lines(data.t$qty.cuarentena)
+lines(data.t$qty.QuedateEnCasa)
+```
+
+
+
+Por países y regiones
+
+```{r}
+
+library(sp)
+library(rworldmap)
+coords2country = function(points)
+{  
+  countriesSP <- getMap(resolution='low')
+
+  # converting points to a SpatialPoints object
+  # setting CRS directly to that from rworldmap
+  pointsSP = SpatialPoints(points, proj4string=CRS(proj4string(countriesSP)))  
+  
+  # use 'over' to get indices of the Polygons object containing each point 
+  indices = sp::over(pointsSP, countriesSP)
+  
+  #indices$continent   # returns the continent (6 continent model)
+  #indices$REGION   # returns the continent (7 continent model)
+
+  indices$ADMIN  #returns country name
+  #indices$ISO3 # returns the ISO3 code 
+}
+
+```
+
+
+
